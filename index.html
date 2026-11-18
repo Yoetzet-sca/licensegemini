@@ -236,7 +236,7 @@ footer a{text-transform:none;letter-spacing:0;font-weight:400;font-size:15px;col
           </div>
         </div>
         <div id="slotArea" data-req-group="slot">
-          <p class="notice"><strong>Your time is a request, not a confirmation.</strong> We hold the slot while we review your inquiry, then confirm or release it by email. Meetings are 30 minutes at our booth in Central Hall, on January 6, 7 or 8 only. We will send the booth number with your confirmation. Times are Las Vegas time (PST).</p>
+          <p class="notice"><strong>Your time is a request, not a confirmation.</strong> We review each inquiry, then email you to confirm the meeting or propose another time. Meetings are 30 minutes at our booth in Central Hall, on January 6, 7 or 8 only. We will send the booth number with your confirmation. Times are Las Vegas time (PST).</p>
           <div id="days"></div>
           <p class="picked" id="picked" aria-live="polite">No time selected yet.</p>
           <p class="err">Select a meeting time, or choose Inquiry only.</p>
@@ -276,9 +276,9 @@ footer a{text-transform:none;letter-spacing:0;font-weight:400;font-size:15px;col
 <script>
 /* ---------- Site settings: edit these ---------- */
 const CONFIG = {
-  // Paste the Google Apps Script web app URL here (see SETUP.md). Empty = preview mode, nothing is sent.
-  API_URL: "",
-  // Slots you want blocked from the start (lunch, staff breaks), same id format.
+  // Web3Forms access key (get one at web3forms.com with info@licensegemini.com). Empty = preview mode, nothing is sent.
+  WEB3FORMS_KEY: "",
+  // Times to show as unavailable: breaks, or meetings you have confirmed. Format "2027-01-06T10:30".
   BLOCKED_SLOTS: [],
   DAYS: [
     { date: "2027-01-06", label: "Wednesday, January 6" },
@@ -329,7 +329,7 @@ function renderDays() {
       const i = document.createElement("input"); i.type = "radio"; i.name = "slot"; i.value = id; i.id = "slot-" + id.replace(/[^0-9T]/g, "");
       i.dataset.label = d.label + " at " + fmt(m);
       const s = document.createElement("span");
-      if (held.has(id)) { i.disabled = true; s.textContent = fmt(m); s.title = "Held"; i.setAttribute("aria-label", fmt(m) + ", held"); }
+      if (held.has(id)) { i.disabled = true; s.textContent = fmt(m); s.title = "Unavailable"; i.setAttribute("aria-label", fmt(m) + ", unavailable"); }
       else { s.textContent = fmt(m); open++; if (id === current) i.checked = true; }
       l.append(i, s); grid.append(l);
     }
@@ -340,14 +340,12 @@ function renderDays() {
 }
 function updatePicked() {
   const c = document.querySelector('input[name="slot"]:checked');
-  $("#picked").innerHTML = c ? "Requested: <b>" + c.dataset.label + "</b>. Held until we confirm or release it." : "No time selected yet.";
+  $("#picked").innerHTML = c ? "Requested: <b>" + c.dataset.label + "</b>. We will confirm by email." : "No time selected yet.";
 }
 renderDays();
 $("#days").addEventListener("change", () => { updatePicked(); $("#slotArea").classList.remove("invalid"); });
 
-if (CONFIG.API_URL) {
-  fetch(CONFIG.API_URL).then(r => r.json()).then(j => { if (j && Array.isArray(j.held)) { j.held.forEach(x => held.add(x)); renderDays(); } }).catch(() => {});
-}
+
 
 const wantsMeeting = () => $("#meet-yes").checked;
 document.querySelectorAll('input[name="meeting"]').forEach(r => r.addEventListener("change", () => {
@@ -394,6 +392,23 @@ function collect() {
   };
 }
 
+// What arrives in the inbox: one line per answer, in this order. "email" sets the reply-to address.
+function emailPayload(d) {
+  return {
+    access_key: CONFIG.WEB3FORMS_KEY,
+    subject: "Gemini licensing inquiry: " + d.company + (d.meeting_requested ? " | meeting requested " + d.meeting_label : ""),
+    email: d.email,
+    "Reference": d.reference,
+    "Meeting requested": d.meeting_requested ? d.meeting_label + " (Las Vegas time), " + d.attendees + " attending" : "No, inquiry only",
+    "Company": d.company, "Website": d.website, "HQ country": d.hq_country, "Company type": d.company_type,
+    "Annual revenue": d.annual_revenue, "Years in business": d.years_in_business,
+    "Regions": d.regions.join(", "), "Specific countries": d.countries, "Rights sought": d.exclusivity,
+    "Category rights sought": d.categories.join(", "), "Products": d.products, "Sales channels": d.channels.join(", "),
+    "First 3 years revenue": d.first_3_years_revenue, "Target launch": d.target_launch, "Brands today": d.licensing_experience,
+    "Name": d.name, "Job title": d.job_title, "Phone": d.phone, "Notes": d.notes
+  };
+}
+
 function showDone(d, preview) {
   const rows = [
     ["Reference", d.reference], ["Company", d.company], ["Territory", d.regions.join(", ")],
@@ -403,8 +418,8 @@ function showDone(d, preview) {
   rows.forEach(([k, v]) => { const w = document.createElement("div"), dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v; w.append(dt, dd); dl.append(w); });
   if (d.meeting_requested) {
     const w = document.createElement("div"), dt = document.createElement("dt"), dd = document.createElement("dd"), p = document.createElement("span");
-    dt.textContent = "CES meeting"; dd.textContent = d.meeting_label + " "; p.className = "pill"; p.textContent = "Held, not confirmed"; dd.append(p); w.append(dt, dd); dl.append(w);
-    $("#doneNote").textContent = "Your meeting time is held while we review your inquiry. We will email " + d.email + " to confirm it or release it. The confirmation will include our booth number. Please do not plan around this slot until you receive it.";
+    dt.textContent = "CES meeting"; dd.textContent = d.meeting_label + " "; p.className = "pill"; p.textContent = "Requested, not confirmed"; dd.append(p); w.append(dt, dd); dl.append(w);
+    $("#doneNote").textContent = "We will review your inquiry and email " + d.email + " to confirm this time or propose another. The confirmation will include our booth number. Please do not plan around this slot until you receive it.";
   } else {
     $("#doneNote").textContent = "We will review your inquiry and reply to " + d.email + ".";
   }
@@ -424,19 +439,12 @@ form.addEventListener("submit", async e => {
   }
   const data = collect();
   if ($("#fax").value) { showDone(data, false); return; } // spam trap
-  if (!CONFIG.API_URL) { if (data.meeting_slot) held.add(data.meeting_slot); showDone(data, true); return; }
+  if (!CONFIG.WEB3FORMS_KEY) { showDone(data, true); return; }
   const btn = $("#send"); btn.disabled = true; btn.textContent = "Sending";
   try {
-    // text/plain keeps this a simple request, which Google Apps Script web apps require.
-    const r = await fetch(CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(data) });
-    if (!r.ok) throw new Error("");
-    const j = await r.json();
-    if (j.error === "slot_taken") {
-      (j.held || [data.meeting_slot]).forEach(x => held.add(x)); renderDays(); $("#slotArea").classList.add("invalid");
-      $("#slotArea").scrollIntoView({ block: "center" });
-      throw new Error("That meeting time was just taken. Choose another time and send again.");
-    }
-    if (!j.ok) throw new Error("");
+    const r = await fetch("https://api.web3forms.com/submit", { method: "POST", headers: { "Content-Type": "application/json", "Accept": "application/json" }, body: JSON.stringify(emailPayload(data)) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) throw new Error("");
     showDone(data, false);
   } catch (err) {
     $("#formerr").textContent = err.message || "We could not send your inquiry. Check your connection and try again, or email info@licensegemini.com.";
