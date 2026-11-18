@@ -255,6 +255,10 @@ footer a{text-transform:none;letter-spacing:0;font-weight:400;font-size:15px;col
           <label class="check" for="consent"><input type="checkbox" id="consent" name="consent"><span>I agree that the information above may be used to evaluate this inquiry and to contact me about it.</span></label>
           <p class="err">Tick the box to send your inquiry.</p>
         </div>
+        <div class="field" id="captchaField">
+          <div class="h-captcha" data-sitekey="50b2fe65-b00b-4b9e-ad62-3ba471098be2" data-callback="captchaOk"></div>
+          <p class="err">Complete the "I am human" check to send your inquiry.</p>
+        </div>
         <div class="hp" aria-hidden="true"><label for="fax">Leave this empty</label><input type="text" id="fax" name="fax" tabindex="-1" autocomplete="off"></div>
         <p class="formerr" id="formerr" role="alert"></p>
         <button class="primary" type="submit" id="send">Send inquiry</button>
@@ -356,6 +360,7 @@ document.querySelectorAll('input[name="meeting"]').forEach(r => r.addEventListen
   $("#slotArea").hidden = !wantsMeeting();
 }));
 
+window.captchaOk = () => { $("#captchaField").classList.remove("invalid"); $("#formerr").textContent = ""; };
 const form = $("#inquiry");
 form.addEventListener("input", e => { const f = e.target.closest(".field,[data-req-group]"); if (f) f.classList.remove("invalid"); });
 form.addEventListener("change", e => { const f = e.target.closest(".field,[data-req-group]"); if (f) f.classList.remove("invalid"); });
@@ -397,9 +402,10 @@ function collect() {
 }
 
 // What arrives in the inbox: one line per answer, in this order. "email" sets the reply-to address.
-function emailPayload(d) {
+function emailPayload(d, token) {
   return {
     access_key: CONFIG.WEB3FORMS_KEY,
+    "h-captcha-response": token,
     subject: "Gemini licensing inquiry: " + d.company + (d.meeting_requested ? " | meeting requested " + d.meeting_label : ""),
     email: d.email,
     "Reference": d.reference,
@@ -441,19 +447,31 @@ form.addEventListener("submit", async e => {
     const c = first.querySelector("input:not([disabled]),select,textarea"); if (c) c.focus({ preventScroll: true });
     return;
   }
+  // Human check (hCaptcha). Skipped in preview mode or if the widget could not load.
+  let token = "";
+  if (CONFIG.WEB3FORMS_KEY && window.hcaptcha) {
+    try { token = window.hcaptcha.getResponse(); } catch (err) {}
+    if (!token) {
+      $("#captchaField").classList.add("invalid");
+      $("#formerr").textContent = "One more step: complete the \"I am human\" check above.";
+      return;
+    }
+  }
   const data = collect();
   if ($("#fax").value) { showDone(data, false); return; } // spam trap
   if (!CONFIG.WEB3FORMS_KEY) { showDone(data, true); return; }
   const btn = $("#send"); btn.disabled = true; btn.textContent = "Sending";
   try {
-    const r = await fetch("https://api.web3forms.com/submit", { method: "POST", headers: { "Content-Type": "application/json", "Accept": "application/json" }, body: JSON.stringify(emailPayload(data)) });
+    const r = await fetch("https://api.web3forms.com/submit", { method: "POST", headers: { "Content-Type": "application/json", "Accept": "application/json" }, body: JSON.stringify(emailPayload(data, token)) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.success) throw new Error("");
     showDone(data, false);
   } catch (err) {
     $("#formerr").textContent = err.message || "We could not send your inquiry. Check your connection and try again, or email info@licensegemini.com.";
+    try { window.hcaptcha && window.hcaptcha.reset(); } catch (e) {}
   } finally { btn.disabled = false; btn.textContent = "Send inquiry"; }
 });
 </script>
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
 </body>
 </html>
